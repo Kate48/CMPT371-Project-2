@@ -1,1 +1,1 @@
-Currently I have written the first two files (channel.py and packet.py) based on code from chatgpt and committed to main. no linking/testing has been done. I am following an outline that Chat made and which I mostly understand. - Kate (Nov 19 12pm) 
+Currently I have written outlines for the first four files (channel.py, packet.py sender_app.py and receiver_app.py) based on code from chatgpt and committed to main. no linking/testing has been done. I am following an outline that Chat made and which I mostly understand. - Kate (Nov 20 12pm) 
