@@ -9,10 +9,10 @@ def make_packet(conn_id: int, # connection id
                 flags: Dict[str, bool], # flags are SYN, ACK, FIN, DATA - explained in sender_app.py
                 rwnd: int, # receiver-side window size 
                 payload: bytes # the content of the packet that isn't headers
-                ) -> bytes
+                ): # -> bytes
     header = {
         "conn_id": conn_id,
-        "seq" = seq, 
+        "seq": seq, 
         "ack": ack,
         "flags": flags,
         "rwnd": rwnd,

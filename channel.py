@@ -8,7 +8,7 @@ class UnreliableChannel: # define our own data type to represent the underlying 
     def __init__(self,
                 local_addr: Tuple[str, int], # (ip, port) to bind this UDP socket
                 drop_prob: float = 0.0, # chance of a packet being dropped - implemented manually 
-                corrupt_prop: float = 0.0) # chance of a bit being flipped - implemented manually 
+                corrupt_prob: float = 0.0): # chance of a bit being flipped - implemented manually 
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(local_addr)
