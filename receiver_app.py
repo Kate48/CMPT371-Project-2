@@ -5,7 +5,7 @@ from packet import parse_packet # parses raw bytes into header and payload
 
 def main():
     channel = UnreliableChannel(("127.0.0.1", 9001), # (ip, port). 127.0.01 is loopback to this device, 9001 is somewhat arbitrary
-                                drop_prob=0.2,
+                                drop_prob=0.2, # probabilities are same as in the UnreliableChannel we made in sender_app.py
                                 corrupt_prob=0.1)
     print("Receiver listening on 127.0.0.1:9001")
 

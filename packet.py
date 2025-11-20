@@ -6,7 +6,7 @@ from typing import Dict, Any
 def make_packet(conn_id: int, # connection id
                 seq: int, # sequence number
                 ack: int, # ack number - latest in order recieved + 1
-                flags: Dict[str, bool], # flags are SYN, ACK, FIN, DATA
+                flags: Dict[str, bool], # flags are SYN, ACK, FIN, DATA - explained in sender_app.py
                 rwnd: int, # receiver-side window size 
                 payload: bytes # the content of the packet that isn't headers
                 ) -> bytes
