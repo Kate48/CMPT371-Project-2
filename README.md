@@ -1,1 +1,8 @@
-Currently I have written outlines for the first four files (channel.py, packet.py sender_app.py and receiver_app.py) based on code from chatgpt and committed to main. no linking/testing has been done. I am following an outline that Chat made and which I mostly understand. - Kate (Nov 20 12pm) 
+In the process of implementing a reliable protocol which meets these requirements:
+
+Connection-oriented: handshake 
+Reliable and pipelined: sliding window - go back n 
+Flow control: adjust rwnd size 
+Congestion control: AIMD on cwnd
+
+So far the handshake is implemented, working on sliding window. - Kate (Nov 22 1pm)
