@@ -1,4 +1,4 @@
-# Reliable, Pipelined protocol (sender/receiver classes)
+# Reliable, Pipelined protocol which performs 3-way handshake
 
 import random
 import socket
@@ -13,7 +13,7 @@ class RDTConnection:
                 remote_addr: Tuple[str,int],
                 conn_id: int,
                 send_seq: int, 
-                recv_seq: int)
+                recv_seq: int):
         self.channel = channel
         self.remote_addr = remote_addr
         self.conn_id = conn_id 
@@ -25,7 +25,7 @@ def client_connect(local_addr: Tuple[str, int],
                    remote_addr: Tuple[str, int],
                    drop_prob: float = 0.0,
                    corrupt_prob: float = 0.0,
-                   timeout = float = 1.0,
+                   timeout:float = 1.0,
                    max_retries: int = 5) -> RDTConnection:
 
     channel = UnreliableChannel(local_addr,
@@ -34,7 +34,7 @@ def client_connect(local_addr: Tuple[str, int],
     channel.settimeout(timeout)
 
     conn_id = random.randint(1,1000000) # connect to a random client - conn ids start at 1
-    client_isn = random.randint(0,1000000) # 
+    client_isn = random.randint(0,1000000) # starting at a large random number to mimick TCP's robustness
 
     flags_syn = {"SYN": True, 
                  "ACK": False,
@@ -70,7 +70,7 @@ def client_connect(local_addr: Tuple[str, int],
                          "DATA": False}
             ack_packet = make_packet(conn_id=conn_id,
                                      seq=client_isn + 1,
-                                     ack=server_idn + 1,
+                                     ack=server_isn + 1,
                                      flags=flags_ack,
                                      rwnd=0,
                                      payload=b"")
@@ -92,8 +92,7 @@ def client_connect(local_addr: Tuple[str, int],
 def server_accept(local_addr: Tuple[str, int],
                   drop_prob: float = 0.0, # increase later
                   corrupt_prob: float = 0.0, # increase later
-                  timeout: float = 2.0)
-
+                  timeout: float = 2.0):
     channel = UnreliableChannel(local_addr,
                                 drop_prob=drop_prob,
                                 corrupt_prob=corrupt_prob)
@@ -144,7 +143,7 @@ def server_accept(local_addr: Tuple[str, int],
                 flags2 = header2["flags"]
 
                 # if what we have received is a correct ACk
-                if flags2.get("ACK") and not flags2.get("SYN") and header2["ack"] = server_isn + 1:
+                if flags2.get("ACK") and not flags2.get("SYN") and header2["ack"] == server_isn + 1:
                     print (f"[server] Got final ACK from {addr2}, connection established")
                     return RDTConnection(channel=channel, # handshake complete, return this connection object
                                          remote_addr=addr,
