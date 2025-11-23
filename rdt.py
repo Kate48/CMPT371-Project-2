@@ -61,27 +61,39 @@ class RDTConnection:
         else:
             payload_bytes = bytes(payload)
 
-        data_len = len(payload_bytes)
-        if data_len == 0:
+        total_len = len(payload_bytes)
+        if total_len == 0:
             return
 
-        seq = self.next_seq # next_seq is the seq num for packet we are about to send
-        expected_ack = self.send_seq + data_len
+        # value of last ack will be starting val + payload length 
+        final_ack = self.send_seq + total_len
 
-        for attempt in range(1, max_retries + 1):
+        attempt = 0
+        # loop cond depends on final_ack as well as retries 
+        while self.base < final_ack and attempt < max_retries:
+            attempt += 1
             
-            # sending packet with seq = next_seq
-            packet = self.send_data_packet(seq, payload_bytes)
-            print(f"[client]  attempt={attempt}")
+            while (self.next_seq < self.base + self.window_size) and (self.next_seq < final_ack):
+                
+                remaining = final_ack - self.next_seq
+                offset = self.next_seq - self.send_seq
+                segment = payload_bytes[offset : offset + remaining]
 
-            # put packet in unacked dict
-            self.unacked[seq] = (packet, data_len)
+                packet = self.send_data_packet(self.next_seq, segment)
+                self.unacked[self.next_seq] = (packet, len(segment))
+                self.next_seq += len(segment)
             
             try:
                 self.channel.settimeout(timeout)
                 raw, addr = self.channel.recvfrom()
             except socket.timeout:
-                print("[client] Timeout waiting for ACK, retransmitting")
+                print("[client] Timeout, retransmitting from base={self.base}")
+                
+                for seq in sorted(self.unacked.keys()): # go back N step! iterate over the unacked packets
+                    packet, _ = self.unacked[seq]
+                    print(f"[client] Retransmitting packet seq={seq}")
+                    self.channel.sendto(packet, self.remote_addr) # resend each unacked packet
+
                 continue
 
             try:
@@ -96,18 +108,27 @@ class RDTConnection:
                 flags.get("ACK") and not flags.get("DATA")):
                 ack_num = header.get("ack", 0)
                 
-                if ack_num >= expected_ack:
-                    print(f"[client] Received ACK for seq {ack_num}")
-                    
-                    self.unacked.pop(seq, None) # removing seq from unacked {} slides the window
-                    self.base = expected_ack
+                if ack_num <= self.base:
+                    print(f"[client] Duplicate/old ACK {ack_num}, base={self.base}")
+                    continue
 
-                    self.send_seq = expected_ack # keep in sync with new base 
-                    self.next_seq = expected_ack # ^^ 
-                    return
+                if ack_num > final_ack:
+                    ack_num = final_ack
+
+                # slide window: remove all unacked packets w seq < ack_num
+                acked_seqs = [s for s in self.unacked.keys() if s < ack_num]
+                for s in acked_seqs:
+                    self.unacked.pop(s, None)
+
+                print(f"[client] Sliding window: base {self.base} -> {ack_num}")
                 
-                else:
-                    print(f"[client] Got ACK {ack_num} but expected {expected_ack}, continuing")
+                self.base = ack_num
+                self.send_seq = ack_num # keep send_seq in sync
+
+                if self.base >= final_ack: # acked the entire payload 
+                    self.next_seq = self.base
+                    return 
+    
             else:
                 print("[client] Unexpected packet while waiting for ACK, ignoring")
 
