@@ -21,6 +21,61 @@ class RDTConnection:
         self.recv_seq = recv_seq # next seq we expect to receive 
         self.state = "ESTABLISHED" # initialize state as established when a new connection starts
 
+    # retransmitting until an ACK arrives
+    def send_data(self, payload: bytes, timeout: float = 1.0, max_retries: int = 5):
+        if isinstance(payload, str):
+            payload_bytes = payload.encode("utf-8")
+        else:
+            payload_bytes = bytes(payload)
+
+        data_len = len(payload_bytes)
+        if data_len == 0:
+            return
+
+        expected_ack = self.send_seq + data_len
+        flags_data = {"SYN": False,
+                      "ACK": False,
+                      "FIN": False,
+                      "DATA": True}
+        packet = make_packet(conn_id=self.conn_id,
+                             seq=self.send_seq,
+                             ack=self.recv_seq,
+                             flags=flags_data,
+                             rwnd=0,
+                             payload=payload_bytes)
+
+        for attempt in range(1, max_retries + 1):
+            print(f"[client] Sending data seq={self.send_seq} attempt={attempt}")
+            self.channel.sendto(packet, self.remote_addr)
+            try:
+                self.channel.settimeout(timeout)
+                raw, addr = self.channel.recvfrom()
+            except socket.timeout:
+                print("[client] Timeout waiting for ACK, retransmitting")
+                continue
+
+            try:
+                header, _ = parse_packet(raw)
+            except ValueError:
+                print("[client] Received corrupt packet while waiting for ACK, ignoring")
+                continue
+
+            flags = header.get("flags", {})
+            if (addr == self.remote_addr and
+                header.get("conn_id") == self.conn_id and
+                flags.get("ACK") and not flags.get("DATA")):
+                ack_num = header.get("ack", 0)
+                if ack_num >= expected_ack:
+                    print(f"[client] Received ACK for seq {ack_num}")
+                    self.send_seq = expected_ack
+                    return
+                else:
+                    print(f"[client] Got ACK {ack_num} but expected {expected_ack}, continuing")
+            else:
+                print("[client] Unexpected packet while waiting for ACK, ignoring")
+
+        raise RuntimeError("Failed to deliver payload after retransmissions")
+
 def client_connect(local_addr: Tuple[str, int],
                    remote_addr: Tuple[str, int],
                    drop_prob: float = 0.0,
@@ -96,6 +151,7 @@ def server_accept(local_addr: Tuple[str, int],
     channel = UnreliableChannel(local_addr,
                                 drop_prob=drop_prob,
                                 corrupt_prob=corrupt_prob)
+    channel.settimeout(timeout)
     print(f"[server] Listening for SYN on {local_addr[0]}:{local_addr[1]}")
 
     while True:
