@@ -7,6 +7,8 @@ from typing import Tuple
 from channel import UnreliableChannel
 from packet import make_packet, parse_packet
 
+N = 4 # window size for go back N
+
 class RDTConnection:
     def __init__(self,
                 channel: UnreliableChannel,
@@ -21,6 +23,37 @@ class RDTConnection:
         self.recv_seq = recv_seq # next seq we expect to receive 
         self.state = "ESTABLISHED" # initialize state as established when a new connection starts
 
+        # added attributes to implement go back N
+        self.base = send_seq
+        self.next_seq = send_seq
+        self.window_size = N
+        self.unacked = {}
+
+    # refactored making a data packet into a helper func
+    def make_data_packet(self, seq: int, payload_bytes: bytes):
+        flags_data = {
+            "SYN": False,
+            "ACK": False,
+            "FIN": False,
+            "DATA": True,
+        }
+        packet = make_packet(
+            conn_id=self.conn_id,
+            seq=seq,
+            ack=self.recv_seq,
+            flags=flags_data,
+            rwnd=0,
+            payload=payload_bytes,
+        )
+        return packet 
+
+    # refactored sending a data packet into a helper func
+    def send_data_packet(self, seq: int, payload_bytes: bytes):
+        packet = self.make_data_packet(seq, payload_bytes)
+        print(f"[client] Sending data seq={seq}")
+        self.channel.sendto(packet, self.remote_addr)
+        return packet
+
     # retransmitting until an ACK arrives
     def send_data(self, payload: bytes, timeout: float = 1.0, max_retries: int = 5):
         if isinstance(payload, str):
@@ -32,21 +65,18 @@ class RDTConnection:
         if data_len == 0:
             return
 
+        seq = self.next_seq # next_seq is the seq num for packet we are about to send
         expected_ack = self.send_seq + data_len
-        flags_data = {"SYN": False,
-                      "ACK": False,
-                      "FIN": False,
-                      "DATA": True}
-        packet = make_packet(conn_id=self.conn_id,
-                             seq=self.send_seq,
-                             ack=self.recv_seq,
-                             flags=flags_data,
-                             rwnd=0,
-                             payload=payload_bytes)
 
         for attempt in range(1, max_retries + 1):
-            print(f"[client] Sending data seq={self.send_seq} attempt={attempt}")
-            self.channel.sendto(packet, self.remote_addr)
+            
+            # sending packet with seq = next_seq
+            packet = self.send_data_packet(seq, payload_bytes)
+            print(f"[client]  attempt={attempt}")
+
+            # put packet in unacked dict
+            self.unacked[seq] = (packet, data_len)
+            
             try:
                 self.channel.settimeout(timeout)
                 raw, addr = self.channel.recvfrom()
@@ -65,10 +95,17 @@ class RDTConnection:
                 header.get("conn_id") == self.conn_id and
                 flags.get("ACK") and not flags.get("DATA")):
                 ack_num = header.get("ack", 0)
+                
                 if ack_num >= expected_ack:
                     print(f"[client] Received ACK for seq {ack_num}")
-                    self.send_seq = expected_ack
+                    
+                    self.unacked.pop(seq, None) # removing seq from unacked {} slides the window
+                    self.base = expected_ack
+
+                    self.send_seq = expected_ack # keep in sync with new base 
+                    self.next_seq = expected_ack # ^^ 
                     return
+                
                 else:
                     print(f"[client] Got ACK {ack_num} but expected {expected_ack}, continuing")
             else:
