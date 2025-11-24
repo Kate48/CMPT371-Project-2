@@ -10,8 +10,8 @@ CONSUMER_DELAY = 0.2  # seconds between reads to simulate slow application
 
 def main():
     # Congestion control test 
-    conn = server_accept(("127.0.0.1", 9001),drop_prob=0.2,corrupt_prob=0.0)
-    # conn = server_accept(("127.0.0.1", 9001),drop_prob=0.0,corrupt_prob=0.0)
+    #conn = server_accept(("127.0.0.1", 9001),drop_prob=0.2,corrupt_prob=0.0)
+    conn = server_accept(("127.0.0.1", 9001),drop_prob=0.0,corrupt_prob=0.0)
 
     conn.recv_buffer_capacity = BUFFER_CAPACITY
     print("[server] Now in ESTABLISHED state with", conn.remote_addr)

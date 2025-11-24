@@ -9,9 +9,9 @@ def main():
         local_addr=("127.0.0.1", 0),       # 0 = OS picks an ephemeral port
         remote_addr=("127.0.0.1", 9001),
         # congestion control test
-        drop_prob = 0.2,
+        #drop_prob = 0.2,
+        drop_prob=0.0, 
 
-        #drop_prob=0.0, 
         corrupt_prob=0.0
     )
     print("[client] Connection established to", conn.remote_addr)
