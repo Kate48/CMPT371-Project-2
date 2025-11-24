@@ -2,7 +2,8 @@
 
 import random
 import socket
-from typing import Tuple
+from collections import deque
+from typing import Optional, Tuple
 
 from channel import UnreliableChannel
 from packet import make_packet, parse_packet
@@ -10,7 +11,7 @@ from packet import make_packet, parse_packet
 N = 4 # num of outstanding packets permitted by go back n
 
 # Flow control test 
-# DEFAULT_RECV_BUFFER = 1000
+#DEFAULT_RECV_BUFFER = 1000
 
 DEFAULT_RECV_BUFFER = 4096 # in bytes, so 4KB (a common socket buffer chunk/used in python.recv docs)
 MSS = 512  # congestion-control segment size in bytes
@@ -44,10 +45,12 @@ class RDTConnection:
         self.recv_buffered = 0
         # congestion-control state (AIMD style)
         self.mss = MSS
-        self.cwnd = self.mss
+        self.cwnd = self.mss  # start slow start with one packet
         self.ssthresh = INITIAL_SSTHRESH
         self.dup_ack_count = 0
         self.last_acked = self.send_seq
+        self.recv_queue = deque()  # in-order payloads waiting for the app
+        self.fin_received = False
 
     # NOTE: Reciver window (three func below), (how many bytes the receiver can accept, and prevent buffer overflow)
     # how many bytes of payload the receiver can still store
@@ -88,6 +91,24 @@ class RDTConnection:
         print(f"[client] Sending data seq={seq}")
         self.channel.sendto(packet, self.remote_addr)
         return packet
+
+    def _send_ack_packet(self):
+        # send a pure ACK reflecting latest recv_seq/rwnd
+        ack_flags = {
+            "SYN": False,
+            "ACK": True,
+            "FIN": False,
+            "DATA": False,
+        }
+        ack_packet = make_packet(
+            conn_id=self.conn_id,
+            seq=self.send_seq,
+            ack=self.recv_seq,
+            flags=ack_flags,
+            rwnd=self.available_recv_window(),
+            payload=b"",
+        )
+        self.channel.sendto(ack_packet, self.remote_addr)
 
     # retransmitting until an ACK arrives
     def send_data(self, payload: bytes, timeout: float = 1.0, max_retries: int = 5):
@@ -216,6 +237,138 @@ class RDTConnection:
                 print("[client] Unexpected packet while waiting for ACK, ignoring")
 
         raise RuntimeError("Failed to deliver payload after retransmissions")
+
+    def recv_data(self, timeout: float = 1.0) -> Optional[bytes]:
+        # blocking receive that returns payload bytes, None on timeout, b'' on FIN
+        while True:
+            if self.recv_queue:
+                data = self.recv_queue.popleft()
+                self.consume_recv_buffer(len(data))
+                return data
+
+            if self.fin_received:
+                return b""
+
+            try:
+                if timeout is not None:
+                    self.channel.settimeout(timeout)
+                raw, addr = self.channel.recvfrom()
+            except socket.timeout:
+                return None
+
+            try:
+                header, payload = parse_packet(raw)
+            except ValueError:
+                continue
+
+            if addr != self.remote_addr or header.get("conn_id") != self.conn_id:
+                continue
+
+            flags = header.get("flags", {})
+
+            if flags.get("FIN"):
+                fin_seq = header.get("seq", 0)
+                self.recv_seq = max(self.recv_seq, fin_seq + 1)
+                self.fin_received = True
+                self.state = "CLOSE_WAIT"
+                self._send_ack_packet()
+                continue
+
+            if flags.get("DATA"):
+                seq = header.get("seq", 0)
+                if seq == self.recv_seq:
+                    self.buffer_incoming(len(payload))
+                    self.recv_queue.append(payload)
+                    self.recv_seq += len(payload)
+                    self._send_ack_packet()
+                else:
+                    self._send_ack_packet()
+
+                continue
+
+            # ignore other packets (eg pure ACK) in receive loop
+
+    def close(self, timeout: float = 1.0, max_retries: int = 5):
+        # terminates connection with a FIN/ACK handshake
+        if self.state == "CLOSED":
+            self.channel.close()
+            return
+
+        fin_flags = {
+            "SYN": False,
+            "ACK": False,
+            "FIN": True,
+            "DATA": False,
+        }
+        fin_seq = self.send_seq
+        fin_packet = make_packet(
+            conn_id=self.conn_id,
+            seq=fin_seq,
+            ack=self.recv_seq,
+            flags=fin_flags,
+            rwnd=self.available_recv_window(),
+            payload=b"",
+        )
+
+        acked = False
+        for attempt in range(max_retries):
+            print("[conn] Sending FIN")
+            self.channel.sendto(fin_packet, self.remote_addr)
+
+            try:
+                self.channel.settimeout(timeout)
+                raw, addr = self.channel.recvfrom()
+            except socket.timeout:
+                continue
+
+            try:
+                header, payload = parse_packet(raw)
+            except ValueError:
+                continue
+
+            flags = header.get("flags", {})
+            if addr != self.remote_addr or header.get("conn_id") != self.conn_id:
+                continue
+
+            if (flags.get("ACK") and not flags.get("DATA")
+                and header.get("ack") == fin_seq + 1):
+                acked = True
+                self.send_seq = fin_seq + 1
+                break
+
+            if flags.get("FIN"):
+                self.recv_seq = header.get("seq", 0) + 1
+                self._send_ack_packet()
+                self.fin_received = True
+                continue
+
+        if not acked:
+            raise RuntimeError("Failed to close connection: FIN not acknowledged")
+
+        if not self.fin_received:
+            while True:
+                try:
+                    self.channel.settimeout(timeout)
+                    raw, addr = self.channel.recvfrom()
+                except socket.timeout:
+                    continue
+
+                try:
+                    header, payload = parse_packet(raw)
+                except ValueError:
+                    continue
+
+                if addr != self.remote_addr or header.get("conn_id") != self.conn_id:
+                    continue
+
+                flags = header.get("flags", {})
+                if flags.get("FIN"):
+                    self.recv_seq = header.get("seq", 0) + 1
+                    self._send_ack_packet()
+                    break
+
+        self.state = "CLOSED"
+        self.channel.close()
 
 def client_connect(local_addr: Tuple[str, int],
                    remote_addr: Tuple[str, int],
