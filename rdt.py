@@ -7,7 +7,7 @@ from typing import Tuple
 from channel import UnreliableChannel
 from packet import make_packet, parse_packet
 
-N = 4 # window size for go back N
+N = 64 # window size for go back N
 
 # Flow control test 
 # DEFAULT_RECV_BUFFER = 1000
