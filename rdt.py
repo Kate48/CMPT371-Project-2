@@ -8,7 +8,11 @@ from channel import UnreliableChannel
 from packet import make_packet, parse_packet
 
 N = 4 # window size for go back N
-DEFAULT_RECV_BUFFER = 4096 # in bytes, so 4KB (a common socket buffer chunk/used in python.recv docs)
+
+# Flow control test 
+DEFAULT_RECV_BUFFER = 1000
+
+#DEFAULT_RECV_BUFFER = 4096 # in bytes, so 4KB (a common socket buffer chunk/used in python.recv docs)
 MSS = 512  # congestion-control segment size in bytes
 INITIAL_SSTHRESH = 4096  # slow start threshold in bytes
 
