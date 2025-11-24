@@ -8,6 +8,10 @@ from channel import UnreliableChannel
 from packet import make_packet, parse_packet
 
 N = 4 # window size for go back N
+DEFAULT_RECV_BUFFER = 4096 # in bytes, so 4KB (a common socket buffer chunk/used in python.recv docs)
+MSS = 512  # congestion-control segment size in bytes
+INITIAL_SSTHRESH = 4096  # slow start threshold in bytes
+
 
 class RDTConnection:
     def __init__(self,
@@ -15,7 +19,8 @@ class RDTConnection:
                 remote_addr: Tuple[str,int],
                 conn_id: int,
                 send_seq: int, 
-                recv_seq: int):
+                recv_seq: int,
+                recv_buffer_capacity: int = DEFAULT_RECV_BUFFER):
         self.channel = channel
         self.remote_addr = remote_addr
         self.conn_id = conn_id 
@@ -28,6 +33,32 @@ class RDTConnection:
         self.next_seq = send_seq
         self.window_size = N
         self.unacked = {}
+        self.peer_rwnd = float("inf")  # latest advertised peer window size
+
+        # flow-control bookkeeping for receivers
+        self.recv_buffer_capacity = recv_buffer_capacity
+        self.recv_buffered = 0
+        # congestion-control state (AIMD style)
+        self.mss = MSS
+        self.cwnd = self.mss
+        self.ssthresh = INITIAL_SSTHRESH
+        self.dup_ack_count = 0
+        self.last_acked = self.send_seq
+
+    # NOTE: Reciver window (three func below), (how many bytes the receiver can accept, and prevent buffer overflow)
+    # how many bytes of payload the receiver can still store
+    def available_recv_window(self) -> int:
+        available = self.recv_buffer_capacity - self.recv_buffered
+        return max(0, available)
+
+    # reserve buffer space accordingly when data arrives
+    def buffer_incoming(self, length: int):
+        self.recv_buffered = min(self.recv_buffer_capacity, self.recv_buffered + max(0, length))
+
+    # free buffer space when data is read 
+    def consume_recv_buffer(self, length: int):
+        self.recv_buffered = max(0, self.recv_buffered - max(0, length))
+
 
     # refactored making a data packet into a helper func
     def make_data_packet(self, seq: int, payload_bytes: bytes):
@@ -42,7 +73,7 @@ class RDTConnection:
             seq=seq,
             ack=self.recv_seq,
             flags=flags_data,
-            rwnd=0,
+            rwnd=self.available_recv_window(), #changed form harcoded 0 to buffer flow control, data stops being sent when its 0
             payload=payload_bytes,
         )
         return packet 
@@ -69,15 +100,28 @@ class RDTConnection:
         final_ack = self.send_seq + total_len
 
         attempt = 0
-        # loop cond depends on final_ack as well as retries 
-        while self.base < final_ack and attempt < max_retries:
-            attempt += 1
-            
-            while (self.next_seq < self.base + self.window_size) and (self.next_seq < final_ack):
-                
-                remaining = final_ack - self.next_seq
+        self.last_acked = self.base
+        while self.base < final_ack:
+            peer_window = self.peer_rwnd
+            if peer_window == float("inf"):
+                peer_window = self.window_size
+            else:
+                try:
+                    peer_window = max(0, int(peer_window))
+                except (TypeError, ValueError):
+                    peer_window = self.window_size
+
+            # sender caps bytes to min(go-back-N window, receiver rwnd, congestion window)
+            send_window = min(self.window_size, peer_window, self.cwnd)
+            window_edge = self.base + max(0, send_window)
+
+            while (self.next_seq < final_ack) and (self.next_seq < window_edge):
+                allowance = min(final_ack - self.next_seq, window_edge - self.next_seq)
+                if allowance <= 0:
+                    break
+
                 offset = self.next_seq - self.send_seq
-                segment = payload_bytes[offset : offset + remaining]
+                segment = payload_bytes[offset : offset + allowance]
 
                 packet = self.send_data_packet(self.next_seq, segment)
                 self.unacked[self.next_seq] = (packet, len(segment))
@@ -87,13 +131,21 @@ class RDTConnection:
                 self.channel.settimeout(timeout)
                 raw, addr = self.channel.recvfrom()
             except socket.timeout:
-                print("[client] Timeout, retransmitting from base={self.base}")
+                print(f"[client] Timeout, retransmitting from base={self.base}")
                 
-                for seq in sorted(self.unacked.keys()): # go back N step! iterate over the unacked packets
+                for seq in sorted(self.unacked.keys()):
                     packet, _ = self.unacked[seq]
                     print(f"[client] Retransmitting packet seq={seq}")
-                    self.channel.sendto(packet, self.remote_addr) # resend each unacked packet
+                    self.channel.sendto(packet, self.remote_addr)
 
+                # congestion timeout -> multiplicative decrease
+                self.ssthresh = max(self.cwnd // 2, self.mss)
+                self.cwnd = self.mss
+                self.dup_ack_count = 0
+
+                attempt += 1
+                if attempt >= max_retries:
+                    break
                 continue
 
             try:
@@ -102,20 +154,36 @@ class RDTConnection:
                 print("[client] Received corrupt packet while waiting for ACK, ignoring")
                 continue
 
+            # tracking the advertised window and resetting retries on progress
             flags = header.get("flags", {})
             if (addr == self.remote_addr and
                 header.get("conn_id") == self.conn_id and
                 flags.get("ACK") and not flags.get("DATA")):
+                advertised_rwnd = header.get("rwnd")
+                if advertised_rwnd is not None:
+                    try:
+                        self.peer_rwnd = max(0, int(advertised_rwnd))
+                    except (TypeError, ValueError):
+                        pass
+
                 ack_num = header.get("ack", 0)
-                
+
+                # triple-duplicate ACKs cause a fast retransmit and halve cwnd, mirroring TCP’s behaviour
                 if ack_num <= self.base:
                     print(f"[client] Duplicate/old ACK {ack_num}, base={self.base}")
+                    if ack_num == self.base:
+                        self.dup_ack_count += 1
+                        if self.dup_ack_count >= 3 and self.base in self.unacked:
+                            print("[client] Triple duplicate ACKs, fast retransmit and cwnd halved")
+                            self.ssthresh = max(self.cwnd // 2, self.mss)
+                            self.cwnd = self.ssthresh
+                            packet, _ = self.unacked[self.base]
+                            self.channel.sendto(packet, self.remote_addr)
                     continue
 
                 if ack_num > final_ack:
                     ack_num = final_ack
 
-                # slide window: remove all unacked packets w seq < ack_num
                 acked_seqs = [s for s in self.unacked.keys() if s < ack_num]
                 for s in acked_seqs:
                     self.unacked.pop(s, None)
@@ -123,9 +191,19 @@ class RDTConnection:
                 print(f"[client] Sliding window: base {self.base} -> {ack_num}")
                 
                 self.base = ack_num
-                self.send_seq = ack_num # keep send_seq in sync
+                self.send_seq = ack_num
+                attempt = 0
+                
+                # successful ACKs grow cwnd via slow start when below ssthresh and additive increase otherwise
+                if self.cwnd < self.ssthresh:
+                    self.cwnd += self.mss
+                else:
+                    increment = max((self.mss * self.mss) // max(self.cwnd, 1), 1)
+                    self.cwnd += increment
+                self.dup_ack_count = 0
+                self.last_acked = ack_num
 
-                if self.base >= final_ack: # acked the entire payload 
+                if self.base >= final_ack:
                     self.next_seq = self.base
                     return 
     
