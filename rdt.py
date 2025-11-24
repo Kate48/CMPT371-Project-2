@@ -7,7 +7,7 @@ from typing import Tuple
 from channel import UnreliableChannel
 from packet import make_packet, parse_packet
 
-N = 4 # window size for go back N
+N = 4 # num of outstanding packets permitted by go back n
 
 # Flow control test 
 # DEFAULT_RECV_BUFFER = 1000
@@ -108,19 +108,20 @@ class RDTConnection:
         while self.base < final_ack:
             peer_window = self.peer_rwnd
             if peer_window == float("inf"):
-                peer_window = self.window_size
+                peer_window = self.window_size * self.mss
             else:
                 try:
                     peer_window = max(0, int(peer_window))
                 except (TypeError, ValueError):
-                    peer_window = self.window_size
+                    peer_window = self.window_size * self.mss
 
-            # sender caps bytes to min(go-back-N window, receiver rwnd, congestion window)
-            send_window = min(self.window_size, peer_window, self.cwnd)
+            # sender caps bytes to min(packets*MSS, receiver rwnd, congestion window)
+            packets_window = self.window_size * self.mss
+            send_window = min(packets_window, peer_window, self.cwnd)
             window_edge = self.base + max(0, send_window)
 
             while (self.next_seq < final_ack) and (self.next_seq < window_edge):
-                allowance = min(final_ack - self.next_seq, window_edge - self.next_seq)
+                allowance = min(final_ack - self.next_seq, window_edge - self.next_seq, self.mss)
                 if allowance <= 0:
                     break
 
