@@ -28,6 +28,13 @@ def main():
         conn.send_data(payload)
         time.sleep(0.5) 
 
+    # fairness BONUS 
+    # payload = b"x" * 1000
+
+    # start = time.time()
+    # while time.time() - start < 10:  # 10 seconds of sending
+    #     conn.send_data(payload)
+
     print("[client] Closing connection")
     conn.close()
     
