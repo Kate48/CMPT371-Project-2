@@ -4,6 +4,7 @@ import random
 import socket
 from collections import deque
 from typing import Optional, Tuple
+import time 
 
 from channel import UnreliableChannel
 from packet import make_packet, parse_packet
@@ -52,6 +53,7 @@ class RDTConnection:
         self.last_acked = self.send_seq
         self.recv_queue = deque()  # in-order payloads waiting for the app
         self.fin_received = False
+        self.zero_window_advertised = False
 
     # NOTE: Reciver window (three func below), (how many bytes the receiver can accept, and prevent buffer overflow)
     # how many bytes of payload the receiver can still store
@@ -89,12 +91,13 @@ class RDTConnection:
     # refactored sending a data packet into a helper func
     def send_data_packet(self, seq: int, payload_bytes: bytes):
         packet = self.make_data_packet(seq, payload_bytes)
-        print(f"[client] Sending data seq={seq}")
+        #print(f"[client] Sending data seq={seq}")
         self.channel.sendto(packet, self.remote_addr)
         return packet
 
     def _send_ack_packet(self):
         # send a pure ACK reflecting latest recv_seq/rwnd
+        advertised = self.available_recv_window()
         ack_flags = {
             "SYN": False,
             "ACK": True,
@@ -106,10 +109,11 @@ class RDTConnection:
             seq=self.send_seq,
             ack=self.recv_seq,
             flags=ack_flags,
-            rwnd=self.available_recv_window(),
+            rwnd=advertised,
             payload=b"",
         )
         self.channel.sendto(ack_packet, self.remote_addr)
+        self.zero_window_advertised = (advertised == 0)
 
     # retransmitting until an ACK arrives
     #FLOW CONTROL test line
@@ -160,6 +164,17 @@ class RDTConnection:
                 self.channel.settimeout(timeout)
                 raw, addr = self.channel.recvfrom()
             except socket.timeout:
+                if self.peer_rwnd == 0:
+                    print("[client] Receiver window = 0, pausing (no retransmission)")
+
+                    # porbing 
+                    time.sleep(0.5)  
+                    # sender DOES NOT retransmit data, only probe
+                    print(f"[client] Probe sent seq={self.send_seq}")
+                    probe = self.make_data_packet(self.send_seq, b"x")
+                    self.channel.sendto(probe, self.remote_addr)
+                    continue
+
                 print(f"[client] Timeout, retransmitting from base={self.base}")
                 
                 for seq in sorted(self.unacked.keys()):
@@ -248,6 +263,8 @@ class RDTConnection:
             if self.recv_queue:
                 data = self.recv_queue.popleft()
                 self.consume_recv_buffer(len(data))
+                if self.zero_window_advertised and self.available_recv_window() > 0:
+                    self._send_ack_packet()
                 return data
 
             if self.fin_received:
@@ -281,6 +298,10 @@ class RDTConnection:
             if flags.get("DATA"):
                 seq = header.get("seq", 0)
                 if seq == self.recv_seq:
+                    if len(payload) > self.available_recv_window():
+                        # buffer full: re-ACK last in-order byte with rwnd=0
+                        self._send_ack_packet()
+                        continue
                     self.buffer_incoming(len(payload))
                     self.recv_queue.append(payload)
                     self.recv_seq += len(payload)

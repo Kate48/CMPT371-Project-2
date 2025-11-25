@@ -18,9 +18,9 @@ def main():
     print("[client] send_seq starts at", conn.send_seq, "recv_seq starts at", conn.recv_seq)
 
     # Flow control test (lines 17-21)
-    payload = b"x" * 8000 
+    payload = b"x" * 3000 
     print("[client] Sending bulk payload")
-    conn.send_data(payload)
+    conn.send_data(payload, timeout=1.0, max_retries=20)
 
     # for i in range(5):
     #     payload = f"message {i}".encode("utf-8")
