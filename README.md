@@ -2,6 +2,8 @@
 
 Please follow these toggles when testing each feature of the RDT project. 
 
+ile references are shown as `path:line`; in VS Code or PyCharm you can Cmd/Ctrl+click them to jump straight to that location. In other editors, paste the reference into the “Go to File/Line” dialog or search for the block manually.
+
 ## Running the demo apps
 1. Start the receiver in one terminal: `python receiver_app.py`
 2. Start the sender in another terminal: `python sender_app.py`

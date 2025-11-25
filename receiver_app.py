@@ -5,11 +5,11 @@ import time
 from rdt import server_accept
 
 # FLow control 
-BUFFER_CAPACITY = 512
-CONSUMER_DELAY = 0.5
+# BUFFER_CAPACITY = 512
+# CONSUMER_DELAY = 0.5
 
-#BUFFER_CAPACITY = 1024  # bytes
-#CONSUMER_DELAY = 0.2  # seconds between reads to simulate slow application
+BUFFER_CAPACITY = 1024  # bytes
+CONSUMER_DELAY = 0.2  # seconds between reads to simulate slow application
 
 
 def main():
