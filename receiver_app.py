@@ -4,8 +4,12 @@ import time
 
 from rdt import server_accept
 
-BUFFER_CAPACITY = 1024  # bytes
-CONSUMER_DELAY = 0.2  # seconds between reads to simulate slow application
+# FLow control 
+BUFFER_CAPACITY = 512
+CONSUMER_DELAY = 0.5
+
+#BUFFER_CAPACITY = 1024  # bytes
+#CONSUMER_DELAY = 0.2  # seconds between reads to simulate slow application
 
 
 def main():
@@ -14,6 +18,7 @@ def main():
     conn = server_accept(("127.0.0.1", 9001),drop_prob=0.0,corrupt_prob=0.0)
 
     conn.recv_buffer_capacity = BUFFER_CAPACITY
+    conn.recv_buffered = 0
     print("[server] Now in ESTABLISHED state with", conn.remote_addr)
 
     total_bytes = 0

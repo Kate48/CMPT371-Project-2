@@ -11,8 +11,9 @@ from packet import make_packet, parse_packet
 N = 4 # num of outstanding packets permitted by go back n
 
 # Flow control test 
-#DEFAULT_RECV_BUFFER = 1000
-DEFAULT_RECV_BUFFER = 4096 # in bytes, so 4KB (a common socket buffer chunk/used in python.recv docs)
+DEFAULT_RECV_BUFFER = 1000
+
+#DEFAULT_RECV_BUFFER = 4096 # in bytes, so 4KB (a common socket buffer chunk/used in python.recv docs)
 
 MSS = 512  # congestion-control segment size in bytes
 INITIAL_SSTHRESH = 4096  # slow start threshold in bytes
@@ -111,7 +112,9 @@ class RDTConnection:
         self.channel.sendto(ack_packet, self.remote_addr)
 
     # retransmitting until an ACK arrives
-    def send_data(self, payload: bytes, timeout: float = 1.0, max_retries: int = 5):
+    #FLOW CONTROL test line
+    #def send_data(self, payload: bytes, timeout: float = 1.0, max_retries: int = 5):
+    def send_data(self, payload: bytes, timeout: float = 1.0, max_retries: int = 15):
         if isinstance(payload, str):
             payload_bytes = payload.encode("utf-8")
         else:
@@ -228,6 +231,7 @@ class RDTConnection:
                     self.cwnd += increment
                 self.dup_ack_count = 0
                 self.last_acked = ack_num
+                print(f"[client] cwnd={self.cwnd}, ssthresh={self.ssthresh}, rwnd={self.peer_rwnd}")
 
                 if self.base >= final_ack:
                     self.next_seq = self.base
